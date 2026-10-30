@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 #
 # Sputnik Media - pitchdeck-nonscripted
-# Installeert de skill en de tools die Antigravity en Claude nodig hebben (macOS).
+# Installeert de tools die Antigravity en Claude nodig hebben voor de skill (macOS),
+# en zet de SKILL.md die je van de AI producer kreeg op de juiste plaatsen.
 #
-# Gebruik:
-#   curl -fsSL https://raw.githubusercontent.com/JOUW-GITHUB-NAAM/sputnik-pitchdeck-skill/main/install.sh | bash
-#   of, in een gekloonde repo:  ./install.sh
+# Normaal voert de agent (Antigravity of Claude) dit uit, na akkoord van de gebruiker:
+#   curl -fsSL https://raw.githubusercontent.com/WoutPaepen/pitch_decks_skills/main/install.sh | bash -s -- --agent --skill ~/Downloads/SKILL.md
+# Zelf in Terminal kan ook: zet de SKILL.md in je map Downloads en plak:
+#   curl -fsSL https://raw.githubusercontent.com/WoutPaepen/pitch_decks_skills/main/install.sh | bash
 #
 # Opties:
+#   --agent         Voor agents: geen vragen, opent geen pagina's, eindigt met een lijst voor de gebruiker
+#   --skill PAD     Gebruik deze SKILL.md (anders zoekt het script in Downloads en op het bureaublad)
 #   --dry-run       Toon wat het script zou doen, zonder iets te veranderen
 #   --ja            Beantwoord elke vraag met ja (geen vragen stellen)
 #   --alleen-skill  Werk alleen de skill bij (geen tools installeren)
@@ -18,10 +22,11 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# Instellingen. Pas REPO aan nadat je de repo op GitHub hebt gezet.
+# Instellingen. Verhuist de repo, pas dan REPO aan.
 # ---------------------------------------------------------------------------
-REPO="${PITCHDECK_REPO:-JOUW-GITHUB-NAAM/sputnik-pitchdeck-skill}"
+REPO="${PITCHDECK_REPO:-WoutPaepen/pitch_decks_skills}"
 BRANCH="${PITCHDECK_BRANCH:-main}"
+INSTALL_CMD="curl -fsSL https://raw.githubusercontent.com/$REPO/$BRANCH/install.sh | bash"
 SKILL_NAME="pitchdeck-nonscripted"
 CANVA_MCP_URL="https://mcp.canva.com/mcp"
 MIN_NODE_MAJOR=20
@@ -39,6 +44,8 @@ URL_CLAUDE_IN_CHROME="https://chromewebstore.google.com/detail/claude/fcoeoabgfe
 DRY_RUN=0
 ASSUME_YES=0
 ONLY_SKILL=0
+AGENT_MODE=0
+SKILL_ARG=""
 
 # ---------------------------------------------------------------------------
 # Hulpfuncties
@@ -100,6 +107,10 @@ ask() { # $1 = vraag. Standaard ja. Geeft 0 bij ja.
 }
 
 open_url() { # vraag of een pagina geopend mag worden
+  if [ "$AGENT_MODE" -eq 1 ]; then
+    say "      Pagina voor de gebruiker: $1"
+    return 0
+  fi
   if ask "Open $1 in je browser?"; then
     if [ "$(uname -s)" = "Darwin" ] && command -v open >/dev/null 2>&1; then
       run open "$1" || say "      Kon de pagina niet openen. Open zelf: $1"
@@ -112,14 +123,18 @@ open_url() { # vraag of een pagina geopend mag worden
 }
 
 usage() {
-  cat <<'TXT'
+  cat <<TXT
 Sputnik Media - pitchdeck-nonscripted installeren (macOS)
 
-Gebruik:
-  curl -fsSL https://raw.githubusercontent.com/<github-naam>/sputnik-pitchdeck-skill/main/install.sh | bash
-  of, in een gekloonde repo:  ./install.sh
+Normaal voert de agent (Antigravity of Claude) dit uit, na akkoord van de gebruiker:
+  $INSTALL_CMD -s -- --agent --skill ~/Downloads/SKILL.md
+
+Zelf in Terminal: zet de SKILL.md in je map Downloads en plak:
+  $INSTALL_CMD
 
 Opties:
+  --agent         Voor agents: geen vragen, opent geen pagina's, eindigt met een lijst voor de gebruiker
+  --skill PAD     Gebruik deze SKILL.md (anders zoekt het script in Downloads en op het bureaublad)
   --dry-run       Toon wat het script zou doen, zonder iets te veranderen
   --ja            Beantwoord elke vraag met ja
   --alleen-skill  Werk alleen de skill bij (geen tools installeren)
@@ -136,7 +151,12 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --ja|-y|--yes) ASSUME_YES=1 ;;
+    --agent) ASSUME_YES=1; AGENT_MODE=1 ;;
     --alleen-skill) ONLY_SKILL=1 ;;
+    --skill)
+      if [ $# -lt 2 ]; then fail "Na --skill hoort het pad naar SKILL.md."; exit 2; fi
+      SKILL_ARG="$2"; shift ;;
+    --skill=*) SKILL_ARG="${1#--skill=}" ;;
     --help|-h) usage; exit 0 ;;
     *) fail "Onbekende optie: $1 (gebruik --help)"; exit 2 ;;
   esac
@@ -155,40 +175,80 @@ say "${C_BOLD}Sputnik Media: pitchdeck-nonscripted installeren${C_OFF}"
 [ "$DRY_RUN" -eq 1 ] && say "Dry-run: er wordt niets veranderd."
 
 # ---------------------------------------------------------------------------
-# 1. De skill ophalen
+# 1. De skill zoeken (de SKILL.md die je van de AI producer kreeg)
 # ---------------------------------------------------------------------------
-title "1. De skill ophalen"
+title "1. De skill zoeken"
 
 SCRIPT_DIR=""
 if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
 
-SKILL_SRC="$WORK_DIR/SKILL.md"
-LOCAL_SKILL="$SCRIPT_DIR/skills/$SKILL_NAME/SKILL.md"
+is_skill_file() { # geldig als het met frontmatter begint en de juiste naam draagt
+  [ -f "$1" ] && [ "$(head -n 1 "$1" 2>/dev/null)" = "---" ] && grep -q "^name: $SKILL_NAME\$" "$1" 2>/dev/null
+}
 
-if [ -n "$SCRIPT_DIR" ] && [ -f "$LOCAL_SKILL" ]; then
-  cp "$LOCAL_SKILL" "$SKILL_SRC"
-  ok "Skill gevonden in de repo naast dit script."
-else
-  case "$REPO" in
-    JOUW-GITHUB-NAAM/*)
-      fail "REPO staat nog op de voorbeeldwaarde. Zet bovenaan install.sh de juiste GitHub-naam,"
-      fail "of draai het script vanuit een gekloonde repo."
-      exit 1
-      ;;
-  esac
-  SKILL_URL="https://raw.githubusercontent.com/$REPO/$BRANCH/skills/$SKILL_NAME/SKILL.md"
-  if ! curl -fsSL "$SKILL_URL" -o "$SKILL_SRC"; then
-    fail "Kon de skill niet downloaden van $SKILL_URL"
+clean_path() { # een pad dat in Terminal is gesleept: aanhalingstekens en escapes weg
+  local p="$1"
+  p="${p#"${p%%[![:space:]]*}"}"; p="${p%"${p##*[![:space:]]}"}"
+  p="${p#\'}"; p="${p%\'}"; p="${p#\"}"; p="${p%\"}"
+  p="${p//\\ / }"
+  case "$p" in \~/*) p="$HOME/${p#\~/}" ;; esac
+  printf '%s' "$p"
+}
+
+find_skill_file() { # nieuwste geldige SKILL.md in de gebruikelijke mappen
+  local best="" f dir
+  for f in "$PWD/SKILL.md" ${SCRIPT_DIR:+"$SCRIPT_DIR/SKILL.md"}; do
+    if is_skill_file "$f" && { [ -z "$best" ] || [ "$f" -nt "$best" ]; }; then best="$f"; fi
+  done
+  for dir in "$HOME/Downloads" "$HOME/Desktop"; do
+    [ -d "$dir" ] || continue
+    while IFS= read -r f; do
+      if is_skill_file "$f" && { [ -z "$best" ] || [ "$f" -nt "$best" ]; }; then best="$f"; fi
+    done < <(find "$dir" -maxdepth 3 -type f -name '*.md' 2>/dev/null)
+  done
+  printf '%s' "$best"
+}
+
+SKILL_FILE=""
+if [ -n "$SKILL_ARG" ]; then
+  SKILL_FILE="$(clean_path "$SKILL_ARG")"
+  if ! is_skill_file "$SKILL_FILE"; then
+    fail "$SKILL_FILE is geen geldige SKILL.md voor $SKILL_NAME. Er is niets veranderd."
     exit 1
   fi
-  ok "Skill gedownload van GitHub ($REPO)."
+else
+  SKILL_FILE="$(find_skill_file)"
+  if [ -z "$SKILL_FILE" ] && have_tty && [ "$ASSUME_YES" -eq 0 ]; then
+    warn "Geen SKILL.md gevonden in Downloads of op het bureaublad."
+    printf '  ?   Sleep het bestand SKILL.md in dit venster en druk op Enter (of alleen Enter om over te slaan): ' > /dev/tty
+    ANSWER=""
+    read -r ANSWER < /dev/tty || ANSWER=""
+    if [ -n "$ANSWER" ]; then
+      SKILL_FILE="$(clean_path "$ANSWER")"
+      if ! is_skill_file "$SKILL_FILE"; then
+        warn "Dat is geen geldige SKILL.md voor $SKILL_NAME; ik ga verder zonder skill."
+        SKILL_FILE=""
+      fi
+    fi
+  fi
 fi
 
-if [ "$(head -n 1 "$SKILL_SRC")" != "---" ] || ! grep -q "^name: $SKILL_NAME\$" "$SKILL_SRC"; then
-  fail "Het gedownloade bestand is geen geldige SKILL.md. Er is niets veranderd."
+SKILL_SRC=""
+if [ -n "$SKILL_FILE" ]; then
+  SKILL_SRC="$WORK_DIR/SKILL.md"
+  cp "$SKILL_FILE" "$SKILL_SRC"
+  ok "Skill gevonden: $SKILL_FILE"
+  SKILL_VERSION="$(grep -m 1 -i '^Versie:' "$SKILL_SRC" || true)"
+  if [ -n "$SKILL_VERSION" ]; then say "      $SKILL_VERSION"; fi
+elif [ "$ONLY_SKILL" -eq 1 ]; then
+  fail "Geen SKILL.md gevonden. Zet hem in je map Downloads, of geef het pad mee met --skill."
   exit 1
+else
+  warn "Geen skill gevonden. Ik installeer alleen de tools."
+  status "ontbreekt" "De skill (SKILL.md van de AI producer)"
+  todo "Vraag de SKILL.md aan de AI producer, zet hem in je map Downloads en draai: $INSTALL_CMD -s -- --alleen-skill"
 fi
 
 # ---------------------------------------------------------------------------
@@ -274,7 +334,9 @@ if [ "$ONLY_SKILL" -eq 0 ]; then
     todo "Installeer de Antigravity-app ($URL_ANTIGRAVITY), open hem één keer en draai dit script opnieuw."
   fi
 
-  if [ "$HAS_CLAUDE_APP" -eq 0 ]; then
+  if [ "$HAS_CLAUDE_APP" -eq 0 ] && [ "$AGENT_MODE" -eq 1 ]; then
+    todo "Optioneel: installeer de Claude desktop-app vanaf $URL_CLAUDE_APP (claude.ai in de browser werkt ook)."
+  elif [ "$HAS_CLAUDE_APP" -eq 0 ]; then
     if ask "Wil je de Claude desktop-app installeren? (Nee = je gebruikt claude.ai in de browser)"; then
       open_url "$URL_CLAUDE_APP"
       todo "Installeer de Claude desktop-app vanaf $URL_CLAUDE_APP en log in."
@@ -305,11 +367,13 @@ install_skill() { # $1 = map met skills, $2 = label
   fi
 }
 
-install_skill "$ANTIGRAVITY_APP_SKILLS" "Antigravity-app"
-status "klaar" "Skill voor de Antigravity-app"
-if [ "$HAS_AGY" -eq 1 ]; then
-  install_skill "$ANTIGRAVITY_CLI_SKILLS" "Antigravity CLI"
-  status "klaar" "Skill voor de Antigravity CLI"
+if [ -n "$SKILL_SRC" ]; then
+  install_skill "$ANTIGRAVITY_APP_SKILLS" "Antigravity-app"
+  status "klaar" "Skill voor de Antigravity-app"
+  if [ "$HAS_AGY" -eq 1 ]; then
+    install_skill "$ANTIGRAVITY_CLI_SKILLS" "Antigravity CLI"
+    status "klaar" "Skill voor de Antigravity CLI"
+  fi
 fi
 
 if [ "$ONLY_SKILL" -eq 0 ]; then
@@ -376,7 +440,7 @@ JS
       todo "Repareer $ANTIGRAVITY_MCP_CONFIG en draai dit script opnieuw."
     fi
   else
-    warn "Zonder Node.js voegt het script alleen niets toe aan Antigravity. Voeg Canva zelf toe:"
+    warn "Zonder Node.js kan het script Canva en de browser niet aan Antigravity toevoegen. Voeg Canva zelf toe:"
     say "      Settings, Customizations, Installed MCP Servers, Add MCP, zoek Canva in de MCP Store."
     status "ontbreekt" "Koppelingen in Antigravity (Node.js nodig)"
     todo "Antigravity: voeg Canva toe via Settings, Customizations, Installed MCP Servers, Add MCP."
@@ -388,25 +452,27 @@ fi
 # ---------------------------------------------------------------------------
 title "5. Claude"
 
-ZIP_DIR="$HOME/Downloads"; [ -d "$ZIP_DIR" ] || ZIP_DIR="$HOME"
-ZIP_PATH="$ZIP_DIR/$SKILL_NAME.zip"
-mkdir -p "$WORK_DIR/pkg/$SKILL_NAME"
-cp "$SKILL_SRC" "$WORK_DIR/pkg/$SKILL_NAME/SKILL.md"
-if [ "$DRY_RUN" -eq 1 ]; then
-  say "      (dry-run) ZIP maken: $ZIP_PATH"
-elif command -v ditto >/dev/null 2>&1; then
-  rm -f "$ZIP_PATH"
-  ditto -c -k --keepParent "$WORK_DIR/pkg/$SKILL_NAME" "$ZIP_PATH"
-  ok "Skill klaargezet als ZIP: $ZIP_PATH"
-elif command -v zip >/dev/null 2>&1; then
-  rm -f "$ZIP_PATH"
-  (cd "$WORK_DIR/pkg" && zip -qr "$ZIP_PATH" "$SKILL_NAME")
-  ok "Skill klaargezet als ZIP: $ZIP_PATH"
-else
-  warn "Geen zip-programma gevonden; maak zelf een ZIP van de map $SKILL_NAME."
+if [ -n "$SKILL_SRC" ]; then
+  ZIP_DIR="$HOME/Downloads"; [ -d "$ZIP_DIR" ] || ZIP_DIR="$HOME"
+  ZIP_PATH="$ZIP_DIR/$SKILL_NAME.zip"
+  mkdir -p "$WORK_DIR/pkg/$SKILL_NAME"
+  cp "$SKILL_SRC" "$WORK_DIR/pkg/$SKILL_NAME/SKILL.md"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    say "      (dry-run) ZIP maken: $ZIP_PATH"
+  elif command -v ditto >/dev/null 2>&1; then
+    rm -f "$ZIP_PATH"
+    ditto -c -k --keepParent "$WORK_DIR/pkg/$SKILL_NAME" "$ZIP_PATH"
+    ok "Skill klaargezet als ZIP: $ZIP_PATH"
+  elif command -v zip >/dev/null 2>&1; then
+    rm -f "$ZIP_PATH"
+    (cd "$WORK_DIR/pkg" && zip -qr "$ZIP_PATH" "$SKILL_NAME")
+    ok "Skill klaargezet als ZIP: $ZIP_PATH"
+  else
+    warn "Geen zip-programma gevonden; maak zelf een ZIP van de map $SKILL_NAME."
+  fi
+  status "actie nodig" "Skill in Claude (ZIP uploaden)"
+  todo "Claude: ga naar Instellingen (Settings), Capabilities. Zet 'Code execution and file creation' aan, klik bij Skills op 'Upload skill' en kies $ZIP_PATH."
 fi
-status "actie nodig" "Skill in Claude (ZIP uploaden)"
-todo "Claude: ga naar Instellingen (Settings), Capabilities. Zet 'Code execution and file creation' aan, klik bij Skills op 'Upload skill' en kies $ZIP_PATH."
 
 if [ "$ONLY_SKILL" -eq 0 ]; then
   status "actie nodig" "Canva in Claude (connector verbinden)"
@@ -431,5 +497,11 @@ if [ "$TODO_COUNT" -gt 0 ]; then
   printf '%s' "$TODO_LINES"
 fi
 say ""
-say "Een nieuwe versie van de skill? Draai dit script opnieuw (of met --alleen-skill)."
+if [ "$AGENT_MODE" -eq 1 ]; then
+  say "Voor de agent: geef de gebruiker de stappen hierboven in het Nederlands, één voor één,"
+  say "en help bij elke stap. Inloggen doet de gebruiker altijd zelf."
+else
+  say "Een nieuwe versie van de skill gekregen? Zet hem in je map Downloads en draai:"
+  say "  $INSTALL_CMD -s -- --alleen-skill"
+fi
 say "Antigravity gebruikt de nieuwe versie meteen; in Claude upload je de nieuwe ZIP opnieuw."
